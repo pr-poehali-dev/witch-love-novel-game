@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
-import { SUITORS, STYLES, POTIONS, DECOR, GIFTS, StyleType, Suitor } from './data';
+import { SUITORS, STYLES, POTIONS, DECOR, GIFTS, StyleType, Suitor, toneOf, TONE_LABEL } from './data';
 import { useGame } from './useGame';
 import Scene from './Scene';
 import StatusBar from './StatusBar';
@@ -147,10 +147,20 @@ function Play({ style, onExit }: { style: StyleType; onExit: () => void }) {
   };
 
   const handleTalk = () => {
-    const line = activeSuitor.dialogues[dialogIdx % activeSuitor.dialogues.length];
+    const tone = toneOf(state.love[activeSuitor.id]);
+    const pool = activeSuitor.dialogues[tone];
+    const line = pool[dialogIdx % pool.length];
     game.talk(activeSuitor.id, line);
     setSceneText(line);
     setDialogIdx((i) => i + 1);
+  };
+
+  const handleInvite = () => {
+    const tone = toneOf(state.love[activeSuitor.id]);
+    const line = activeSuitor.visit[tone];
+    game.invite(activeSuitor.id, line);
+    setPanel('home');
+    setSceneText(line);
   };
 
   // ENDING
@@ -178,7 +188,27 @@ function Play({ style, onExit }: { style: StyleType; onExit: () => void }) {
       </div>
 
       {/* SCENE */}
-      <Scene suitor={sceneSuitor} text={sceneText} location={location} />
+      <Scene suitor={sceneSuitor} text={sceneText} location={location} decor={state.decor} />
+
+      {/* ПОМОЩЬ — видна, когда мало денег или есть долг */}
+      {(state.money < 60 || state.debt > 0) && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-2 animate-fade-in">
+          <Icon name="TriangleAlert" size={16} className="text-accent" />
+          <span className="text-sm text-foreground/90 flex-1 min-w-[180px]">
+            {state.debt > 0
+              ? `Денег мало, и висит долг ${state.debt} монет.`
+              : 'Монет в обрез — скоро аренда. Попроси помощи у поклонников.'}
+          </span>
+          <Button size="sm" variant="outline" disabled={state.helpUsed} onClick={game.askForHelp}>
+            <Icon name="HandHeart" size={15} /> Попросить денег
+          </Button>
+          {state.debt > 0 && (
+            <Button size="sm" variant="outline" disabled={state.money <= 0} onClick={game.payDebt}>
+              <Icon name="Coins" size={15} /> Вернуть долг
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* NAV TABS */}
       <div className="flex flex-wrap gap-2 mt-4 mb-3">
@@ -213,7 +243,14 @@ function Play({ style, onExit }: { style: StyleType; onExit: () => void }) {
       <div className="rounded-2xl border border-border bg-card/60 backdrop-blur p-4 sm:p-5 animate-scale-in">
         {panel === 'home' && <HomePanel game={game} />}
         {panel === 'meet' && (
-          <MeetPanel suitors={SUITORS} active={activeSuitor} onSelect={meet} onTalk={handleTalk} love={state.love} />
+          <MeetPanel
+            suitors={SUITORS}
+            active={activeSuitor}
+            onSelect={meet}
+            onTalk={handleTalk}
+            onInvite={handleInvite}
+            love={state.love}
+          />
         )}
         {panel === 'shop' && <ShopPanel game={game} />}
         {panel === 'decor' && <DecorPanel game={game} />}
@@ -279,15 +316,17 @@ function HomePanel({ game }: { game: GameApi }) {
     <div className="grid sm:grid-cols-2 gap-3">
       <ActionCard icon="Apple" title="Купить еду (+2)" sub="−20 монет · трата действия" onClick={game.buyFood} />
       <ActionCard
-        icon="FlaskConical"
-        title="К зельеварению"
-        sub="Свари и продай зелья за монеты"
-        onClick={() => {}}
-        disabled
+        icon="Coins"
+        title="Вернуть долг"
+        sub={game.state.debt > 0 ? `Долг: ${game.state.debt} монет` : 'Долгов нет'}
+        onClick={game.payDebt}
+        disabled={game.state.debt <= 0 || game.state.money <= 0}
+        accent="#ff4d5e"
       />
       <p className="sm:col-span-2 text-xs text-muted-foreground">
-        💡 У тебя 3 действия в день. Разговоры, зелья и еда тратят действие. Декор и подарки — нет.
-        Каждый понедельник нужно платить аренду 60 монет.
+        💡 У тебя 3 действия в день. Разговоры, встречи, зелья и еда тратят действие. Декор и подарки — нет.
+        Каждый понедельник списывается аренда 60 монет. Если денег мало — над сценой появится кнопка
+        «Попросить денег» у поклонников.
       </p>
     </div>
   );
@@ -298,14 +337,17 @@ function MeetPanel({
   active,
   onSelect,
   onTalk,
+  onInvite,
   love,
 }: {
   suitors: Suitor[];
   active: Suitor;
   onSelect: (s: Suitor) => void;
   onTalk: () => void;
+  onInvite: () => void;
   love: Record<string, number>;
 }) {
+  const tone = toneOf(love[active.id]);
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-2">
@@ -326,9 +368,20 @@ function MeetPanel({
           </button>
         ))}
       </div>
-      <Button onClick={onTalk} className="w-full" style={{ background: active.accent, color: '#1a1020' }}>
-        <Icon name="MessageCircleHeart" size={18} /> Поговорить с {active.name} (+3% любви)
-      </Button>
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Настроение:</span>
+        <span className="rounded-full px-2.5 py-0.5 font-medium" style={{ background: `${active.accent}22`, color: active.accent }}>
+          {TONE_LABEL[tone]}
+        </span>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-2">
+        <Button onClick={onTalk} className="w-full" style={{ background: active.accent, color: '#1a1020' }}>
+          <Icon name="MessageCircleHeart" size={18} /> Поговорить (+3%)
+        </Button>
+        <Button onClick={onInvite} variant="outline" className="w-full">
+          <Icon name="DoorOpen" size={18} /> Пригласить в гости (+4%)
+        </Button>
+      </div>
     </div>
   );
 }
@@ -413,7 +466,11 @@ function CharsPanel({ love, style }: { love: Record<string, number>; style: Styl
             </h4>
             <p className="text-xs text-muted-foreground mb-2">{s.role}</p>
             <LoveMeter suitor={s} value={love[s.id]} />
-            <p className="text-[11px] mt-2 text-muted-foreground">
+            <p className="text-[11px] mt-2">
+              <span className="text-muted-foreground">Настроение: </span>
+              <b style={{ color: s.accent }}>{TONE_LABEL[toneOf(love[s.id])]}</b>
+            </p>
+            <p className="text-[11px] mt-1 text-muted-foreground">
               Любит образ: <b style={{ color: s.accent }}>{s.styleLabel}</b>
               {s.likedStyle === style && ' ✨ (твой стиль!)'}
             </p>
